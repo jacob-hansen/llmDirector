@@ -223,11 +223,27 @@ class Director:
         """
         Create FastAPI routes for each listener in the Director.
         """
-        for event_name in self.listeners:
-            @self.api_app.post(f"/api/{event_name}")  # Create a POST route for each event
-            async def route(request: Request, event_name=event_name):
-                data = await request.json()
-                return await self.__call__(event_name, data)
+        for event_name, listeners in self.listeners.items():
+            for listener in listeners:
+                if hasattr(listener, "BLOCK_TYPE") and listener.BLOCK_TYPE == "Save":
+                    self._create_save_route(event_name, listener)
+
+                @self.api_app.post(f"/api/{event_name}")  # Create a POST route for each event
+                async def route(request: Request, event_name=event_name):
+                    data = await request.json()
+                    return await self.__call__(event_name, data)
+
+    def _create_save_route(self, event_name: str, listener: Any):
+        """
+        Create a specific route for a Save block to handle history data retrieval.
+
+        Args:
+            event_name (str): The event name associated with the Save block.
+            listener (Any): The listener object representing the Save block.
+        """
+        @self.api_app.get(f"/api/{event_name}/history")
+        async def history_route(include_timestamp: Optional[bool] = None, delete_history: bool = False):
+            return listener.get_history(include_timestamp, delete_history)
     
     def run_api(self, host: str = "0.0.0.0", port: int = 8000):
         """

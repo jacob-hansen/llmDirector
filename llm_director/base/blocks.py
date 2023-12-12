@@ -187,7 +187,7 @@ class Save(Action):
                     f.write(f"{data}\n")
         return None
     
-    def get_history(self, include_timestamp: Optional[bool] = None) -> List[Any]:
+    def get_history(self, include_timestamp: Optional[bool] = None, delete_history: bool = False) -> List[Any]:
         """
         Get the history of the action.
 
@@ -198,10 +198,12 @@ class Save(Action):
             List[Any]: A list of all the data that has been processed by the action.
         """
         if (include_timestamp is not None and include_timestamp) or (include_timestamp is None and self.include_timestamp):
-            # include decimal seconds
-            return [(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp)) + f".{str(timestamp).split('.')[1][:3]}Z", data) for timestamp, data in self.history]
+            return_list = [(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp)) + f".{str(timestamp).split('.')[1][:3]}Z", data) for timestamp, data in self.history]
         else:
-            return [data for _, data in self.history]
+            return_list = [data for _, data in self.history]
+        if delete_history:
+            self.history = []
+        return return_list        
 
 class Termination(Action):
     BLOCK_TYPE = "Termination"
