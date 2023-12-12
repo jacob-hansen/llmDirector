@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, List, Callable, Optional
+from typing import Any, List, Callable, Optional, Dict
 import time 
 
 class Action:
@@ -34,7 +34,7 @@ class Action:
 
         self.has_been_initialized_properly: bool = True
 
-    async def forward(self, data: Any) -> Any:
+    async def forward(self, data: Any, args: Optional[Dict[str, Any]] = None) -> Any:
         """
         Process the data. This method can be overridden by subclasses to implement custom behavior.
 
@@ -46,7 +46,7 @@ class Action:
         """
         return data
 
-    async def __call__(self, data: Any) -> Any:
+    async def __call__(self, data: Any, args: Optional[Dict[str, Any]] = None) -> Any:
         """
         Make the Action instance callable. It checks for proper initialization and calls the 'forward' method.
 
@@ -64,7 +64,7 @@ class Action:
         
         for _ in range(self.retry_count):
             try:
-                result = await self.forward(data)
+                result = await self.forward(data, args)
                 parsed_result = self.parser(result)
                 return parsed_result
             except Exception as e:
@@ -73,7 +73,7 @@ class Action:
                 else:
                     raise e
         else:
-            result = await self.forward(data)
+            result = await self.forward(data, args)
             parsed_result = self.parser(result)
             return parsed_result
 
@@ -87,7 +87,7 @@ class Split(Action):
         """
         super().__init__(name)
     
-    async def forward(self, data: Any) -> List[Any]:
+    async def forward(self, data: Any, args: Optional[Dict[str, Any]] = None) -> List[Any]:
         """
         Process each element in the data list individually.
 
@@ -102,7 +102,7 @@ class Split(Action):
         """
         return data
     
-    async def __call__(self, data: Any) -> Any:
+    async def __call__(self, data: Any, args: Optional[Dict[str, Any]] = None) -> Any:
         """
         Make the Action instance callable. It checks for proper initialization and calls the 'forward' method.
 
@@ -112,7 +112,7 @@ class Split(Action):
         Returns:
             Any: The processed data.
         """
-        output = await self.forward(data)
+        output = await self.forward(data, args)
         if not isinstance(output, list):
             raise ValueError("Split action expects list-type data.")
         return output
@@ -129,7 +129,7 @@ class Condition(Action):
         """
         super().__init__(name)
 
-    async def forward(self, data: Any) -> bool:
+    async def forward(self, data: Any, args: Optional[Dict[str, Any]] = None) -> Any:
         """
         Process data based on a condition.
 
@@ -141,7 +141,7 @@ class Condition(Action):
         """
         return True
 
-    async def __call__(self, data: Any) -> bool:
+    async def __call__(self, data: Any, args: Optional[Dict[str, Any]] = None) -> Any:
         """
         Make the Action instance callable. It checks for proper initialization and calls the 'forward' method.
 
@@ -151,7 +151,7 @@ class Condition(Action):
         Returns:
             Any: The processed data.
         """
-        return await self.forward(data)
+        return await self.forward(data, args)
 
 class Save(Action):
     BLOCK_TYPE = "Save"
@@ -168,7 +168,7 @@ class Save(Action):
         self.save_path = save_path
         self.include_timestamp = include_timestamp
 
-    async def forward(self, data: Any) -> Any:
+    async def forward(self, data: Any, args: Optional[Dict[str, Any]] = None) -> Any:
         """
         Save the data to a file.
 
@@ -216,7 +216,7 @@ class Termination(Action):
         """
         super().__init__("Termination")
 
-    async def forward(self, data: Any) -> Any:
+    async def forward(self, data: Any, args: Optional[Dict[str, Any]] = None) -> Any:
         """
         Termination action logic, if any.
 

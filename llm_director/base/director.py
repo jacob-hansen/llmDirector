@@ -1,6 +1,6 @@
 import asyncio
 from collections import deque
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Optional
 from utils.director_utils import flatten_results_func, return_endpoints
 from fastapi import FastAPI, Request
 import uvicorn
@@ -106,13 +106,14 @@ class Director:
         else:
             return []
 
-    async def __call__(self, event_name: str, data: Any, flatten_results: bool = False, completion_results: bool = False) -> List[Dict[str, Any]]:
+    async def __call__(self, event_name: str, data: Any, args: Optional[Dict[str, Any]] = None, flatten_results: bool = False, completion_results: bool = False) -> List[Dict[str, Any]]:
         """
         Make the Director instance callable. It processes the events and manages the listeners.
 
         Args:
             event_name (str): The name of the event to process.
             data (Any): The data to be passed to the listeners.
+            args (Optional[Any]): Optional arguments to pass to the listeners.
             flatten_results (bool): Flag to determine if results should be flattened.
             completion_results (bool): Flag to return only the results of the final event.
 
@@ -128,7 +129,7 @@ class Director:
                 self.log(f"Processing events for '{event_name}'")
                 events = []
                 for listener in self.listeners[event_name]:                    
-                    action_completion = asyncio.create_task(self._handle_listener(listener, data, kwargs=kwargs))
+                    action_completion = asyncio.create_task(self._handle_listener(listener, data, args=args, kwargs=kwargs))
 
                     # If depth-first execution is enabled, wait for the action to complete before triggering the next event
                     if self.depth_first:
@@ -178,7 +179,7 @@ class Director:
         coroutines = [self.__call__(event_name, data) for event_name, data in calls]
         return await asyncio.gather(*coroutines)
 
-    async def _handle_listener(self, listener: Callable, data: Any, kwargs: Dict[str, Any] = {}) -> Tuple[Any, List[Dict[str, Any]]]:
+    async def _handle_listener(self, listener: Callable, data: Any, args: Optional[Dict[str, Any]] = None, kwargs: Dict[str, Any] = {}) -> Tuple[Any, List[Dict[str, Any]]]:
         """
         Handle a listener function, processing its result and triggering subsequent events.
 
@@ -189,25 +190,25 @@ class Director:
         Returns:
             Tuple(Any, List[Dict[str, Any]]): A tuple containing the result of the listener and the chain of subsequent event results.
         """
-        result = await listener(data)
+        result = await listener(data, args=args)
         next_event_name = listener.__name__
         
         if listener.BLOCK_TYPE == "Split":
             # trigger next event for each result
             self.log(f"Splitting '{next_event_name}'")
-            chain = [self.__call__(next_event_name, r, **kwargs) for r in result]
+            chain = [self.__call__(next_event_name, r, args=args, **kwargs) for r in result]
         elif listener.BLOCK_TYPE == "Condition":
             # trigger next event if condition is met
             if result:
                 self.log(f"Condition '{next_event_name}' met")
-                chain = [self.__call__(next_event_name, data, **kwargs),]
+                chain = [self.__call__(next_event_name, args=args, data, **kwargs),]
             else:
                 self.log(f"Condition '{next_event_name}' failed")
                 chain = []
             return (data, chain)
         else:
             # trigger next event once on the result
-            chain = [self.__call__(next_event_name, result, **kwargs),]
+            chain = [self.__call__(next_event_name, result, args=args, **kwargs),]
         return (result, chain)
 
     def log(self, message: str):
