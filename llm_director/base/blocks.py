@@ -1,9 +1,10 @@
 import asyncio
 from typing import Any, List, Callable, Optional
+import time 
 
 class Action:
     BLOCK_TYPE = "Action"
-    def __init__(self, name: str, parser: Optional[Callable] = None, retry_count: int = 0, retry_delay: int = 0, retry_on: Optional[Exception] = None):
+    def __init__(self, name: str, parser: Optional[Callable] = None, retry_count: Optional[int] = 0, retry_delay: Optional[int] = 0, retry_on: Optional[Exception] = None):
         """
         Initialize an Action object.
 
@@ -18,8 +19,8 @@ class Action:
             retry_delay (int): The number of seconds to wait between retries.
             retry_on (Optional[Exception]): The exception to retry on. When None, all exceptions are retried.
         """
-        assert name != "Termination", "Action name cannot be 'Termination' (reserved for Termination action block)"
-        assert name != "Save", "Action name cannot be 'Save' (reserved for Save action block)"
+        assert name != "Termination" or self.BLOCK_TYPE == "Termination", "Action name cannot be 'Termination' (reserved for Termination action block)"
+        assert name != "Save" or self.BLOCK_TYPE == "Save", "Action name cannot be 'Save' (reserved for Save action block)"
         
         self.__name__ = name
         self.retry_count: int = retry_count
@@ -119,18 +120,16 @@ class Split(Action):
 
 class Condition(Action):
     BLOCK_TYPE = "Condition"
-    def __init__(self, name: str, condition: Callable[[Any], bool]):
+    def __init__(self, name: str):
         """
         Initialize a Condition action.
 
         Args:
             name (str): The name of the action.
-            condition (Callable[[Any], bool]): A callable that takes data as input and returns a boolean.
         """
         super().__init__(name)
-        self.condition = condition
 
-    async def forward(self, data: Any) -> Any:
+    async def forward(self, data: Any) -> bool:
         """
         Process data based on a condition.
 
@@ -138,12 +137,71 @@ class Condition(Action):
             data (Any): The input data to process.
 
         Returns:
-            Any: The processed data if condition is true, otherwise the unaltered data.
+            bool: True if the condition is met, False otherwise.
         """
-        if self.condition(data):
-            return await super().forward(data)
+        return True
+
+    async def __call__(self, data: Any) -> bool:
+        """
+        Make the Action instance callable. It checks for proper initialization and calls the 'forward' method.
+
+        Args:
+            data (Any): The input data to process.
+
+        Returns:
+            Any: The processed data.
+        """
+        return await self.forward(data)
+
+class Save(Action):
+    BLOCK_TYPE = "Save"
+    def __init__(self, name: str, save_path: Optional[str] = None, include_timestamp: bool = False):
+        """
+        Initialize a Save action.
+
+        Args:
+            name (str): The name of the action.
+            save_path (str, optional): The path to save the data to. Defaults to None.
+        """
+        super().__init__(name)
+        self.history = []
+        self.save_path = save_path
+        self.include_timestamp = include_timestamp
+
+    async def forward(self, data: Any) -> Any:
+        """
+        Save the data to a file.
+
+        Args:
+            data (Any): The input data to process.
+
+        Returns:
+            Any: The unaltered data.
+        """
+        self.history.append(tuple([time.time(), data]))
+        if self.save_path is not None:
+            with open(self.save_path, "a") as f:
+                if self.include_timestamp:
+                    f.write(f"{time.time()}\t{data}\n")
+                else:
+                    f.write(f"{data}\n")
+        return None
+    
+    def get_history(self, include_timestamp: Optional[bool] = None) -> List[Any]:
+        """
+        Get the history of the action.
+
+        Args:
+            include_timestamp (Optional[bool], optional): Whether to include the timestamp in the returned data. Defaults to None, which uses the class value of the 'include_timestamp' attribute.
+
+        Returns:
+            List[Any]: A list of all the data that has been processed by the action.
+        """
+        if (include_timestamp is not None and include_timestamp) or (include_timestamp is None and self.include_timestamp):
+            # include decimal seconds
+            return [(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp)) + f".{str(timestamp).split('.')[1][:3]}Z", data) for timestamp, data in self.history]
         else:
-            return data
+            return [data for _, data in self.history]
 
 class Termination(Action):
     BLOCK_TYPE = "Termination"

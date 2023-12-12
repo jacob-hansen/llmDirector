@@ -1,10 +1,13 @@
 import asyncio
 from collections import deque
-from typing import Any, Callable, Dict, List, Optional
-from utils.director_utils import flatten_results
+from typing import Any, Callable, Dict, List, Optional, Tuple
+from utils.director_utils import flatten_results_func, return_endpoints
+from fastapi import FastAPI, Request
+import uvicorn
+import requests
 
 class Director:
-    def __init__(self, max_concurrent_actions: int = 100, max_logs: int = 1000000, depth_first: bool = False, flatten_results: bool = False):
+    def __init__(self, max_concurrent_actions: int = 100, max_logs: int = 1000000, depth_first: bool = False):
         """
         Initialize a Director object.
 
@@ -12,22 +15,21 @@ class Director:
             max_concurrent_actions (int): Maximum number of concurrent actions.
             max_logs (int): Maximum number of log entries to store.
             depth_first (bool): Flag to determine if depth-first execution should be used.
-            flatten_results (bool): Flag to determine if results should be flattened.
 
         Attributes:
             listeners (Dict[str, List[Callable]]): A dictionary mapping event names to listener functions.
             logs (deque): A deque for storing log messages with a maximum length.
             semaphore (asyncio.Semaphore): Semaphore to limit the number of concurrent actions.
             depth_first (bool): Flag indicating if depth-first execution is enabled, triggering subsequent events before the current event completes on all listeners.
-            flatten_results (bool): Flag indicating if results should be flattened.
             actions (Dict[str, Callable]): A dictionary mapping action names to their instances.
+            api_app (FastAPI): A FastAPI instance for exposing the Director API.
         """
         self.listeners: Dict[str, List[Callable]] = {}
         self.logs: deque = deque(maxlen=max_logs)
         self.semaphore: asyncio.Semaphore = asyncio.Semaphore(max_concurrent_actions)
         self.depth_first: bool = depth_first
-        self.flatten_results: bool = flatten_results
         self.actions: Dict[str, Callable] = {}
+        self.api_app = FastAPI()
 
     def subscribe(self, event_name: str, listener: Callable):
         """
@@ -104,17 +106,21 @@ class Director:
         else:
             return []
 
-    async def __call__(self, event_name: str, data: Any) -> List[Dict[str, Any]]:
+    async def __call__(self, event_name: str, data: Any, flatten_results: bool = False, completion_results: bool = False) -> List[Dict[str, Any]]:
         """
         Make the Director instance callable. It processes the events and manages the listeners.
 
         Args:
             event_name (str): The name of the event to process.
             data (Any): The data to be passed to the listeners.
+            flatten_results (bool): Flag to determine if results should be flattened.
+            completion_results (bool): Flag to return only the results of the final event.
 
         Returns:
             List[Dict[str, Any]]: A list of results from the event listeners.
         """
+        kwargs = {"flatten_results": flatten_results, "completion_results": completion_results}
+
         # Limit the number of concurrent actions with a semaphore
         async with self.semaphore:
             return_results = []
@@ -122,7 +128,7 @@ class Director:
                 self.log(f"Processing events for '{event_name}'")
                 events = []
                 for listener in self.listeners[event_name]:                    
-                    action_completion = asyncio.create_task(self._handle_listener(listener, data))
+                    action_completion = asyncio.create_task(self._handle_listener(listener, data, kwargs=kwargs))
 
                     # If depth-first execution is enabled, wait for the action to complete before triggering the next event
                     if self.depth_first:
@@ -136,6 +142,7 @@ class Director:
                     else:
                         events.append((listener.__name__, action_completion))
                 
+                # events is non-empty only when depth-first execution is disabled
                 for event in events:
                     data = await event[1]
                     chain_results = data[1]
@@ -146,14 +153,32 @@ class Director:
 
                 self.log(f"Events for '{event_name}' completed")
 
-                if self.flatten_results: 
-                    return flatten_results(return_results)
+                
+                # if there is listeners and completion_results is True, return only the chain
+                if completion_results:
+                    return_results = return_endpoints(return_results, self.listeners)
+                if flatten_results: 
+                    result = flatten_results_func(return_results)
+                    return result
                 return return_results
             else: 
                 self.log(f"No listeners for '{event_name}'")
                 return None
+    
+    async def batch_run(self, calls: List[Tuple[str, Any]]) -> List[Any]:
+        """
+        Run a batch of actions concurrently and wait for all to complete.
 
-    async def _handle_listener(self, listener: Callable, data: Any) -> (Any, List[Dict[str, Any]]):
+        Args:
+            calls (List[Tuple[str, Any]]): A list of tuples, each containing an event name and the associated data.
+
+        Returns:
+            List[Any]: A list containing the results of all the actions.
+        """
+        coroutines = [self.__call__(event_name, data) for event_name, data in calls]
+        return await asyncio.gather(*coroutines)
+
+    async def _handle_listener(self, listener: Callable, data: Any, kwargs: Dict[str, Any] = {}) -> Tuple[Any, List[Dict[str, Any]]]:
         """
         Handle a listener function, processing its result and triggering subsequent events.
 
@@ -168,9 +193,21 @@ class Director:
         next_event_name = listener.__name__
         
         if listener.BLOCK_TYPE == "Split":
-            chain = [self.__call__(next_event_name, r) for r in result]
+            # trigger next event for each result
+            self.log(f"Splitting '{next_event_name}'")
+            chain = [self.__call__(next_event_name, r, **kwargs) for r in result]
+        elif listener.BLOCK_TYPE == "Condition":
+            # trigger next event if condition is met
+            if result:
+                self.log(f"Condition '{next_event_name}' met")
+                chain = [self.__call__(next_event_name, data, **kwargs),]
+            else:
+                self.log(f"Condition '{next_event_name}' failed")
+                chain = []
+            return (data, chain)
         else:
-            chain = [self.__call__(next_event_name, result),]
+            # trigger next event once on the result
+            chain = [self.__call__(next_event_name, result, **kwargs),]
         return (result, chain)
 
     def log(self, message: str):
@@ -181,3 +218,26 @@ class Director:
             message (str): The message to log.
         """
         self.logs.append(message)
+
+    def create_api_routes(self):
+        """
+        Create FastAPI routes for each listener in the Director.
+        """
+        for event_name in self.listeners:
+            @self.api_app.post(f"/api/{event_name}")  # Create a POST route for each event
+            async def route(request: Request, event_name=event_name):
+                data = await request.json()
+                return await self.__call__(event_name, data)
+    
+    def run_api(self, host: str = "0.0.0.0", port: int = 8000):
+        """
+        Run the FastAPI server with the created routes.
+
+        WARNING!!! This method is blocking and should be called last in the script.
+
+        Args:
+            host (str): The host address on which to run the API server.
+            port (int): The port on which to run the API server.
+        """
+        self.create_api_routes()
+        uvicorn.run(self.api_app, host=host, port=port)
