@@ -1,4 +1,4 @@
-# LLM-Director
+# llmDirector
 ## Introduction 📖
 A light-weight Python library 🐍 for deploying DAG chains of customizable Large Language Model operations. Leveraging the asyncio framework, LLM-Director allows developers to create, manage, and orchestrate actions and processes in an efficient and scalable manner. With its unique structure and integration with FastAPI, LLM-Director offes a robust solution for building applications, API endpoints, and workflow automation systems. 
 
